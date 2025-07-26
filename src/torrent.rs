@@ -5,7 +5,7 @@ use chrono::{DateTime, Local};
 use octocrab::models::repos::Content;
 use thiserror::Error;
 use tokio::{
-    fs::{self, File},
+    fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
@@ -69,7 +69,8 @@ pub async fn download_newest_tracker() -> Result<(), AnyError> {
 /// * 打开记录文件可能发生错误
 /// * 时间的反序列化可能产生错误
 async fn update_time_record() -> Result<DateTime<Local>, AnyError> {
-    if is_file(UPDATE_TIME_RECORD).await? {
+    let path = Path::new(UPDATE_TIME_RECORD);
+    if path.is_file() {
         let mut buf = String::new();
         let _ = File::open(UPDATE_TIME_RECORD)
             .await?
@@ -82,13 +83,6 @@ async fn update_time_record() -> Result<DateTime<Local>, AnyError> {
     }
 }
 
-/// 判断指定路径是否为文件类型，如果是链接类型，应该判断其指向的真实文件类型
-/// # Errors
-/// 如果文件没有list权限或者打开文件获取元数据失败会返回错误
-async fn is_file(path: impl AsRef<Path>) -> Result<bool, AnyError> {
-    Ok(fs::try_exists(&path).await? && File::open(&path).await?.metadata().await?.is_file())
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -99,30 +93,6 @@ mod tests {
     };
 
     use super::*;
-
-    #[tokio::test]
-    async fn test_is_file() {
-        const TEST_FILE_NAME: &'static str = "test.txt";
-        const TEST_DIR_NAME: &'static str = "test";
-        const TEST_FILE_LINK: &'static str = "test_file_link";
-        const TEST_DIR_LINK: &'static str = "test_dir_link";
-        // file
-        let f = File::create(TEST_FILE_NAME).await.unwrap();
-        assert_eq!(is_file(TEST_FILE_NAME).await.unwrap(), true);
-        drop(f);
-        // directory
-        let _ = fs::create_dir(TEST_DIR_NAME).await.unwrap();
-        assert_eq!(is_file(TEST_DIR_NAME).await.unwrap(), false);
-        // link
-        let _ = fs::symlink(TEST_FILE_NAME, TEST_FILE_LINK).await.unwrap();
-        assert_eq!(is_file(TEST_FILE_LINK).await.unwrap(), true);
-        let _ = fs::symlink(TEST_DIR_NAME, TEST_DIR_LINK).await.unwrap();
-        assert_eq!(is_file(TEST_DIR_LINK).await.unwrap(), false);
-        fs::remove_file(TEST_FILE_LINK).await.unwrap();
-        fs::remove_file(TEST_DIR_LINK).await.unwrap();
-        fs::remove_file(TEST_FILE_NAME).await.unwrap();
-        fs::remove_dir(TEST_DIR_NAME).await.unwrap();
-    }
 
     #[tokio::test]
     async fn test_update_time_record() {
