@@ -42,7 +42,12 @@ fn parse_time_range_line(line: &str, re: &Regex) -> Result<(NaiveTime, NaiveTime
 /// 返回结果时间行
 fn incr_time_line(line: &str, re: &Regex, ms: i32) -> String {
     let (beg, end) = parse_time_range_line(line, re).expect("failed to parse the time range line");
-    let (new_beg, _) = beg.overflowing_add_signed(TimeDelta::try_milliseconds(ms.into()).unwrap());
+
+    let (new_beg, delta) =
+        beg.overflowing_add_signed(TimeDelta::try_milliseconds(ms.into()).unwrap());
+    if delta != 0 {
+        return line.into();
+    }
     let (new_end, _) = end.overflowing_add_signed(TimeDelta::try_milliseconds(ms.into()).unwrap());
     format!(
         "{} --> {}",
