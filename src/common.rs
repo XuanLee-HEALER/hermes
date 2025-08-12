@@ -1,10 +1,15 @@
 use std::{
     ffi::OsStr,
+    io,
     path::{Path, PathBuf},
+    process::ExitStatus,
 };
 
 use anyhow::Result;
 use thiserror::Error;
+use tokio::process::Command;
+use walkdir::WalkDir;
+use which::which;
 
 #[derive(Debug, Error)]
 enum CommonError {
@@ -35,8 +40,67 @@ pub fn same_path_with(
     Ok(new_path)
 }
 
+/// 查找某个命令的完整路径，如果提供了父目录 `path` ，那么会在父目录下查找，不会进入该目录的其它子目录，否则会在环境变量中查找，使用等效于Unix系统的 `which` 功能
+pub fn find_command_path<P: AsRef<Path>>(path: Option<P>, command: &str) -> Option<PathBuf> {
+    match path {
+        Some(path) => {
+            if path.as_ref().is_dir() {
+                for entry in WalkDir::new(path).max_depth(1) {
+                    let entry = entry.ok()?;
+                    if entry.file_name().to_string_lossy() == command {
+                        return Some(entry.into_path());
+                    }
+                }
+            }
+            None
+        }
+        None => which(command).ok(),
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum CommandError {
+    #[error("Command [{cmd}] failed with status code: {status}. Stderr: {stderr}")]
+    CommandFailed {
+        cmd: String,
+        status: ExitStatus,
+        stderr: String,
+    },
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+/// 异步执行指定的命令，传入指定的参数，等待命令执行完成后，返回它的标准输出和标准错误的内容
+pub async fn exec_command<S: AsRef<OsStr>>(
+    cmd: impl AsRef<Path>,
+    options: Option<Vec<S>>,
+) -> Result<(String, String), CommandError> {
+    let mut command = Command::new(cmd.as_ref().as_os_str());
+    if let Some(options) = options {
+        command.args(options);
+    }
+    let output = command.output().await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        Ok((stdout, stderr))
+    } else {
+        Err(CommandError::CommandFailed {
+            cmd: cmd.as_ref().to_string_lossy().to_string(),
+            status: output.status,
+            stderr,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -54,5 +118,161 @@ mod tests {
             same_path_with("/root/test.rs", "f", "_").unwrap().as_ref(),
             Path::new("/root/test_f.rs")
         );
+    }
+
+    #[test]
+    fn test_command_found_in_specified_path() {
+        // 创建临时目录
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let bin_dir = temp_dir.path().join("bin");
+        fs::create_dir(&bin_dir).expect("Failed to create bin dir");
+
+        // 在临时目录中创建模拟的命令文件
+        let command_path = bin_dir.join("my-tool");
+        fs::write(&command_path, "I am a tool").expect("Failed to create command file");
+
+        // 调用函数进行测试
+        let result = find_command_path(Some(&bin_dir), "my-tool");
+
+        // 验证结果，应该找到文件路径
+        assert_eq!(result, Some(command_path));
+    }
+
+    #[test]
+    fn test_command_not_found_in_specified_path() {
+        // 创建临时目录
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let bin_dir = temp_dir.path().join("bin");
+        fs::create_dir(&bin_dir).expect("Failed to create bin dir");
+
+        // 在临时目录中创建另一个文件，但不是我们要找的
+        let another_file = bin_dir.join("another-tool");
+        fs::write(&another_file, "I am another tool").expect("Failed to create file");
+
+        // 调用函数进行测试，查找一个不存在的命令
+        let result = find_command_path(Some(&bin_dir), "non-existent-tool");
+
+        // 验证结果，应该返回 None
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_specified_path_is_invalid() {
+        // 创建一个不存在的路径
+        let invalid_path = PathBuf::from("this/path/does/not/exist/123");
+
+        // 调用函数进行测试
+        let result = find_command_path(Some(&invalid_path), "some-command");
+
+        // 验证结果，应该返回 None，因为路径无效
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_no_path_specified_and_command_exists() {
+        // 此测试依赖于系统环境变量 PATH，因此需要找一个
+        // 几乎在所有系统上都存在的命令，比如 "ls"
+        let result = find_command_path::<&str>(None, "ls");
+
+        // 验证结果，应该找到路径
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_no_path_specified_and_command_does_not_exist() {
+        // 找一个几乎不可能在任何系统上存在的命令
+        let non_existent_command = "a-very-unique-command-that-will-not-exist";
+        let result = find_command_path::<&str>(None, non_existent_command);
+
+        // 验证结果，应该返回 None
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_exec_command_success() {
+        // 跨平台命令，打印 "hello world" 到标准输出
+        let cmd = if cfg!(target_os = "windows") {
+            "cmd.exe"
+        } else {
+            "echo"
+        };
+        let options = if cfg!(target_os = "windows") {
+            vec!["/c", "echo hello world"]
+        } else {
+            vec!["hello world"]
+        };
+
+        let result = exec_command(cmd, Some(options)).await;
+
+        // 验证结果，应该成功且标准输出正确
+        assert!(result.is_ok());
+        let (stdout, stderr) = result.unwrap();
+        assert_eq!(stdout.trim(), "hello world");
+        assert_eq!(stderr, "");
+    }
+
+    #[tokio::test]
+    async fn test_exec_command_success_without_options() {
+        // 跨平台命令，无参数执行，例如 "ls" 或 "dir"
+        let cmd = if cfg!(target_os = "windows") {
+            "dir"
+        } else {
+            "ls"
+        };
+        let result = exec_command(cmd, None::<Vec<&str>>).await;
+
+        // 验证结果，应该成功，且有输出但无标准错误
+        assert!(result.is_ok());
+        let (stdout, stderr) = result.unwrap();
+        assert!(!stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_exec_command_failure() {
+        // 跨平台命令，返回非零退出码
+        let cmd = if cfg!(target_os = "windows") {
+            "cmd.exe"
+        } else {
+            "sh"
+        };
+        let options = if cfg!(target_os = "windows") {
+            // cmd.exe /c exit 1 是在 Windows 上返回非零退出码的标准方式
+            vec!["/c", "exit 1"]
+        } else {
+            // sh -c "exit 1" 是在 Unix-like 系统上返回非零退出码的标准方式
+            vec!["-c", "exit 1"]
+        };
+
+        let result = exec_command(cmd, Some(options)).await;
+
+        // 验证结果，应该返回 CommandError::CommandFailed
+        assert!(result.is_err());
+        if let Err(CommandError::CommandFailed {
+            cmd: _,
+            status,
+            stderr,
+        }) = result
+        {
+            assert_ne!(status.code(), Some(0));
+            assert_eq!(stderr, ""); // 此命令通常不产生标准错误
+        } else {
+            panic!("Expected CommandFailed error, but got a different error.");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_exec_command_not_found() {
+        // 确保这个命令几乎不可能在任何系统上存在
+        let cmd = "a-non-existent-program-for-testing";
+        let result = exec_command(cmd, None::<Vec<&str>>).await;
+
+        // 验证结果，应该返回一个 io::Error，通常是 "No such file or directory"
+        assert!(result.is_err());
+        if let Err(CommandError::Io(e)) = result {
+            assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+        } else {
+            panic!("Expected an Io error, but got a different error.");
+        }
     }
 }

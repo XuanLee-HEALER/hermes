@@ -572,6 +572,7 @@ dependencies = [
  "regex",
  "reqwest",
  "shellexpand",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",
