@@ -1,7 +1,17 @@
 [package]
-name = "hermes"
+name = "blowup"
 version = "0.1.0"
 edition = "2024"
+authors = ["mouselee"]
+rust-version = "1.88"
+description = "All tools related to improving my movie-watching experience."
+readme = "README.md"
+repository = "https://github.com/XuanLee-HEALER/hermes"
+license = "MIT"
+license-file = "LICENSE.txt"
+keywords = ["tracker", "srt", "movie", "torrent", "film"]
+categories = ["command-line-utilities"]
+exclude = ["*.srt"]
 
 [dependencies]
 octocrab = "0.44.1"

@@ -1,6 +1,28 @@
-# hermes
+# blowup
 
-和看电影有关的工具合集，对ffmpeg的简单使用
+![维护状态](https://img.shields.io/badge/Status-Active-yellow?style=for-the-badge&logo=movistar&logoSize=wider) ![版本](https://img.shields.io/badge/Version-0.1.0-red?style=for-the-badge&logo=movistar&logoSize=wider) ![License](https://img.shields.io/badge/License-MIT-darkgreen?style=for-the-badge&logo=movistar&logoSize=wider)
+
+> **blow-up [Michelangelo Antonioni]**: A fashion photographer unknowingly captures a death on film after following two lovers in a park.
+>
+> The best movie I've seen so far.
+>
+> 我认为的最好的电影，目前为止
+
+解决在观影过程中遇到的一些技术性问题
+
+我的观影流程
+
+1. 通过各种媒介（影评、豆瓣、抖音）了解到一部感兴趣的电影
+2. 在种子网站搜资源，例如 rarbg
+3. 下载资源
+4. 处理字幕，YTS资源通常带英文字幕
+5. 观看电影
+6. 电影的处理
+
+目前遇到的问题
+
+1. 种子下载器，qBittorrent每次下电影需要手动修改tracker列表，我需要在github上将几个仓库的新的tracker文件打开拷贝，这个工作需要自动化
+2. 字幕处理，现在从字幕网下载的字幕基本都和YTS资源时间轴对不上，需要简单处理，我想直接从下载好的电影中把字幕流提取出来使用本地大模型翻译，试试提高翻译质量。提取工具使用`ffmpeg`
 
 ## 字幕
 
@@ -34,7 +56,7 @@ TODO：首先检测容器中是否有字幕流，有多个字幕流的情况（�
 * 每个字幕条目的持续时间
 * 获取某个条目的字符串，包括原始字符串、语义切分后的字符串等
 
-#### 翻译字幕
+### 翻译字幕
 
 读取指定路径的srt字幕文件，根据指定的语言名称，将其翻译成中文，在同目录生成翻译好的中文字幕文件
 

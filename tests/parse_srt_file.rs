@@ -3,7 +3,7 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
-use hermes::sub::SrtFile;
+use blowup::sub::SrtFile;
 
 fn main() {
     test_parse_srt();

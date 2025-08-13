@@ -1,4 +1,6 @@
 /target
-hermes
 
 *.txt
+.env
+
+!LICENSE.txt
