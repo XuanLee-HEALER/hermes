@@ -1,5 +1,8 @@
 use clap::{Args, Parser, Subcommand};
-use hermes::{sub::extract_sub_srt, torrent::download_newest_tracker};
+use hermes::{
+    sub::{OverlapFixMode, extract_sub_srt, update_srt_time},
+    torrent::download_newest_tracker,
+};
 
 #[derive(Parser)]
 #[command(propagate_version = true, version = "0.1", about = "all about movie", long_about = None)]
@@ -37,7 +40,16 @@ struct SubArgs {
 #[derive(Subcommand)]
 enum SubCommands {
     #[command(about = "Modify SRT time entries: add or subtract a millisecond offset")]
-    Incr { file_name: String, ms: i32 },
+    Incr {
+        #[arg(help = "Video file path")]
+        file_name: String,
+        #[arg(help = "Modification duration in milliseconds")]
+        ms: i64,
+        #[arg(
+            help = "Mode for handling overlaps: 1 to keep the first entry's time, 2 to keep the second."
+        )]
+        overlap_mode: OverlapFixMode,
+    },
     #[command(
         name = "export",
         about = "Extract subtitle streams from the specified video container to a designated location"
@@ -59,9 +71,11 @@ async fn main() -> anyhow::Result<()> {
             TrackerCommands::Update {} => download_newest_tracker().await?,
         },
         Commands::Sub(sub_args) => match &sub_args.commands {
-            SubCommands::Incr { file_name, ms } => {
-                unimplemented!()
-            }
+            SubCommands::Incr {
+                file_name,
+                ms,
+                overlap_mode,
+            } => update_srt_time(file_name, *ms, overlap_mode.clone()),
             SubCommands::ExportSub {
                 file_name,
                 output_path,

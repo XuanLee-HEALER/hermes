@@ -57,33 +57,6 @@ mod srt;
 //     )
 // }
 
-// pub fn update_srt_time(file: impl AsRef<Path>, ms: i32) {
-//     let re = Regex::new(LINE_REGEX).unwrap();
-//     let p = file.as_ref();
-//     let new_file = same_path_with(p, "proofread", "_").expect("new file name error");
-//     let f = File::open(p).expect("failed to open the subtitle file");
-//     let mut nf = File::create(new_file.as_ref()).expect("failed to create the new subtitle file");
-//     let br = BufReader::new(f);
-//     let mut update_flag = false;
-//     let mut buf = String::new();
-//     for line in br.lines() {
-//         let line = line.unwrap();
-//         let wl = if let Ok(_) = line.parse::<i32>() {
-//             update_flag = true;
-//             line
-//         } else if update_flag {
-//             // 更新行
-//             update_flag = false;
-//             incr_time_line(&line, &re, ms)
-//         } else {
-//             line
-//         };
-//         buf.write_fmt(format_args!("{}\n", wl)).unwrap();
-//     }
-//     nf.write_all(buf.as_bytes()).unwrap();
-//     nf.flush().unwrap();
-// }
-
 // struct SrtSubtitles {
 //     seq: Vec<SrtItem>,
 // }
@@ -162,10 +135,17 @@ mod srt;
 //     }
 // }
 
-use std::path::Path;
+pub use srt::OverlapFixMode;
+pub use srt::SrtFile;
 
-use crate::ffmpeg::{FfmpegError, FfmpegTool};
+use std::{fs::File, path::Path};
 
+use crate::{
+    common::same_path_with,
+    ffmpeg::{FfmpegError, FfmpegTool},
+};
+
+/// 将 file 视频容器中的字幕流以srt文件的格式提取到 sub 路径中
 pub async fn extract_sub_srt<P: AsRef<Path>>(file: P, sub: P) -> Result<(), FfmpegError> {
     let options = vec![
         "-i",
@@ -180,6 +160,23 @@ pub async fn extract_sub_srt<P: AsRef<Path>>(file: P, sub: P) -> Result<(), Ffmp
         .exec_with_options(None::<&'static str>, Some(options))
         .await?;
     Ok(())
+}
+
+/// 更新srt字幕文件 `file` 中的所有时间戳向前或向后移动 `ms` 毫秒
+/// # Panic
+/// 如果移动后的结果超过时间范围则程序退出，不生成修改后的文件
+pub fn update_srt_time<P: AsRef<Path>>(file: P, ms: i64, mode: OverlapFixMode) {
+    let p = file.as_ref();
+    let new_file = same_path_with(p, "mod", "_").expect("new file name error");
+    let f = File::open(p).expect("failed to open the subtitle file");
+    let mut srt_file = SrtFile::read(f).expect("failed to parse the srt file");
+    srt_file
+        .adjust_timestamps(ms, mode)
+        .expect("failed to adjust the timestamps");
+    let mut nf = File::create(new_file).expect("failed to create the new srt file");
+    srt_file
+        .write(&mut nf)
+        .expect("failed to write content to new srt file");
 }
 
 // #[cfg(test)]

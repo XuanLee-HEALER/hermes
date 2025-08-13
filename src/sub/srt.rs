@@ -12,6 +12,7 @@ use std::{
 };
 
 use chrono::Duration;
+use clap::ValueEnum;
 use regex::Regex;
 use thiserror::Error;
 
@@ -23,6 +24,10 @@ pub enum SrtError {
     ParseTextError(String),
     #[error("IO error")]
     IoError(io::Error),
+    #[error("Failed to fix overlapping entries. The problematic line is {0}")]
+    OverlapError(String),
+    #[error("Generated an invalid timestamp.")]
+    InvalidTsError,
 }
 
 pub type Result<T> = result::Result<T, SrtError>;
@@ -32,8 +37,19 @@ pub struct SrtFile {
     entries: Vec<SubtitleEntry>,
 }
 
+/// 修复重叠时间段的模式
+/// 1. `Before` 将后一条目的起始时间修改为前一条目的结束时间（修复默认行为）
+/// 2. `After` 将前一条目的结束时间修改为后一条目的起始时间
+#[derive(Clone, ValueEnum)]
+pub enum OverlapFixMode {
+    #[clap(name = "1")]
+    Before,
+    #[clap(name = "2")]
+    After,
+}
+
 impl SrtFile {
-    fn read<R: Read>(r: R) -> Result<Self> {
+    pub fn read<R: Read>(r: R) -> Result<Self> {
         let br = BufReader::new(r);
         let mut lines = br
             .lines()
@@ -84,7 +100,7 @@ impl SrtFile {
         Ok(Self { entries })
     }
 
-    fn write<W: Write>(&self, w: &mut W) -> Result<()> {
+    pub fn write<W: Write>(&self, w: &mut W) -> Result<()> {
         let mut bw = BufWriter::new(w);
         for entry in &self.entries {
             #[cfg(target_family = "unix")]
@@ -97,9 +113,116 @@ impl SrtFile {
         bw.flush().map_err(|e| SrtError::IoError(e))?;
         Ok(())
     }
+
+    /// 检查srt文件中条目之间的时间段是否有重合
+    pub fn check_ts_overlap(&self) -> bool {
+        match self.entries.len() {
+            0 | 1 => false,
+            _ => {
+                let mut start_point = self.entries[0].timestamp.end_ts;
+                for entry in self.entries.iter().skip(1) {
+                    if entry.timestamp.beg_ts < start_point {
+                        return true;
+                    }
+                    start_point = entry.timestamp.end_ts
+                }
+                false
+            }
+        }
+    }
+
+    /// 根据提供的修复模式修复重叠时间戳的情况
+    /// # Error
+    /// 如果被修复的条目的持续时间 < 0，那么不应用修复，并返回错误
+    pub fn fix_ts_overlap(&mut self, mode: OverlapFixMode) -> Result<()> {
+        if !self.check_ts_overlap() {
+            Ok(())
+        } else {
+            // (索引, 新时间值, 是否修改beg_ts)
+            let mut plan: Vec<(usize, Duration, bool)> = Vec::new();
+
+            // 第一阶段：生成修复计划并验证其合法性
+            for i in 1..self.entries.len() {
+                let prev_entry = &self.entries[i - 1];
+                let curr_entry = &self.entries[i];
+                // 检查重叠
+                if curr_entry.timestamp.beg_ts < prev_entry.timestamp.end_ts {
+                    match mode {
+                        OverlapFixMode::Before => {
+                            let new_beg_ts = prev_entry.timestamp.end_ts;
+                            // 验证修复后的持续时间
+                            if new_beg_ts > curr_entry.timestamp.end_ts {
+                                return Err(SrtError::OverlapError(format!(
+                                    "Fixing current entry would result in non-positive duration: prev({}) curr({})",
+                                    prev_entry.timestamp, curr_entry.timestamp
+                                )));
+                            }
+                            // 记录修复计划：修改当前条目的 beg_ts
+                            plan.push((i, new_beg_ts, true));
+                        }
+                        OverlapFixMode::After => {
+                            let new_end_ts = curr_entry.timestamp.beg_ts;
+                            // 验证修复后的持续时间
+                            if new_end_ts < prev_entry.timestamp.beg_ts {
+                                return Err(SrtError::OverlapError(format!(
+                                    "Fixing previous entry would result in non-positive duration: prev({}) curr({})",
+                                    prev_entry.timestamp, curr_entry.timestamp
+                                )));
+                            }
+                            // 记录修复计划：修改前一条目的 end_ts
+                            plan.push((i - 1, new_end_ts, false));
+                        }
+                    }
+                }
+            }
+
+            // 如果没有需要修复的条目，直接返回
+            if plan.is_empty() {
+                return Ok(());
+            }
+
+            // 第二阶段：应用所有合法的修改
+            for (index, new_ts, is_beg) in plan {
+                let entry = &mut self.entries[index];
+                if is_beg {
+                    entry.timestamp.update_beg_ts(new_ts);
+                } else {
+                    entry.timestamp.update_end_ts(new_ts);
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    /// 将每个字幕条目的时间戳调整 `delta` ms
+    /// # 修改规则
+    /// 1. 对于 `delta < 0` 的情况，如果当前时间戳减去这个数值的绝对值小于0，那么不做处理
+    /// 2. 对于修改后的字幕文件会应用重叠检测和修改
+    /// # Error
+    /// 如果调整后的时间超出srt时间戳所表示的时间（超过100小时），会返回 `InvalidTsError`
+    /// ⚠️即使出现错误原实例的部分内容也会被修改，不应该在错误的基础上继续使用该实例
+    pub fn adjust_timestamps(&mut self, delta: i64, fix_mode: OverlapFixMode) -> Result<()> {
+        let is_add = delta.is_positive();
+        let delta = Duration::milliseconds(delta.abs());
+        for entry in &mut self.entries {
+            if !is_add && entry.timestamp.beg_ts >= delta {
+                entry.timestamp.beg_ts -= delta;
+                entry.timestamp.end_ts -= delta;
+            }
+            if is_add {
+                entry.timestamp.beg_ts += delta;
+                entry.timestamp.end_ts += delta;
+            }
+            if !entry.timestamp.is_valid() {
+                return Err(SrtError::InvalidTsError);
+            }
+        }
+        self.fix_ts_overlap(fix_mode)
+    }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct SubtitleEntry {
     pub index: u32,
     timestamp: SrtTime,
@@ -110,7 +233,7 @@ static SRT_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\d{2}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2}):(\d{2}):(\d{2}),(\d{3})$").unwrap()
 });
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct SrtTime {
     beg_ts: Duration,
     end_ts: Duration,
@@ -142,6 +265,21 @@ impl SrtTime {
 
     pub fn entry_dur_millis(&self) -> i64 {
         self.dur.num_milliseconds()
+    }
+
+    fn update_beg_ts(&mut self, new_ts: Duration) {
+        self.beg_ts = new_ts;
+        self.dur = self.end_ts - self.beg_ts
+    }
+
+    fn update_end_ts(&mut self, new_ts: Duration) {
+        self.end_ts = new_ts;
+        self.dur = self.end_ts - self.beg_ts
+    }
+
+    fn is_valid(&self) -> bool {
+        let max = Duration::hours(100);
+        self.beg_ts < max && self.end_ts < max
     }
 
     fn dur_to_timestamp(dur: Duration) -> String {
@@ -213,6 +351,262 @@ mod tests {
 
     use super::*;
     use chrono::Duration;
+
+    fn create_entry(beg_s: i64, end_s: i64) -> SubtitleEntry {
+        SubtitleEntry {
+            index: 1,
+            timestamp: SrtTime::new(Duration::seconds(beg_s), Duration::seconds(end_s)),
+            text: "".to_string(),
+        }
+    }
+
+    // --- 正向调整测试 ---
+    #[test]
+    fn test_adjust_timestamps_positive() {
+        let mut srt_file = SrtFile {
+            entries: vec![create_entry(10, 15), create_entry(20, 25)],
+        };
+
+        let result = srt_file.adjust_timestamps(3000, OverlapFixMode::Before);
+        assert!(result.is_ok());
+
+        let expected_entries = vec![create_entry(13, 18), create_entry(23, 28)];
+        assert_eq!(srt_file.entries, expected_entries);
+    }
+
+    // --- 负向调整测试 ---
+    #[test]
+    fn test_adjust_timestamps_negative() {
+        let mut srt_file = SrtFile {
+            entries: vec![create_entry(10, 15), create_entry(20, 25)],
+        };
+
+        let result = srt_file.adjust_timestamps(-5000, OverlapFixMode::Before);
+        assert!(result.is_ok());
+
+        let expected_entries = vec![create_entry(5, 10), create_entry(15, 20)];
+        assert_eq!(srt_file.entries, expected_entries);
+    }
+
+    // --- 负向调整导致时间戳小于0的测试 ---
+    #[test]
+    fn test_adjust_timestamps_negative_clamping() {
+        let mut srt_file = SrtFile {
+            entries: vec![create_entry(2, 5), create_entry(10, 15)],
+        };
+
+        let result = srt_file.adjust_timestamps(-5000, OverlapFixMode::Before);
+        assert!(result.is_ok());
+
+        let expected_entries = vec![
+            create_entry(2, 5), // 此条目应被跳过，保持不变
+            create_entry(5, 10),
+        ];
+        assert_eq!(srt_file.entries, expected_entries);
+    }
+
+    // --- 调整导致时间溢出的测试 ---
+    #[test]
+    fn test_adjust_timestamps_overflow() {
+        let mut srt_file = SrtFile {
+            entries: vec![
+                create_entry(359999, 360000), // 接近100小时
+            ],
+        };
+
+        // 调整1秒就会溢出
+        let result = srt_file.adjust_timestamps(1000, OverlapFixMode::Before);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SrtError::InvalidTsError));
+    }
+
+    #[test]
+    fn test_no_overlap_fix() {
+        let mut srt_file = SrtFile {
+            entries: vec![
+                create_entry(0, 5),
+                create_entry(5, 10),
+                create_entry(11, 15),
+            ],
+        };
+        let original_entries = srt_file.entries.clone();
+
+        let result = srt_file.fix_ts_overlap(OverlapFixMode::After);
+        assert!(result.is_ok());
+        assert_eq!(srt_file.entries, original_entries);
+    }
+
+    #[test]
+    fn test_fix_after_mode() {
+        let mut srt_file = SrtFile {
+            entries: vec![create_entry(0, 5), create_entry(4, 10), create_entry(9, 15)],
+        };
+
+        let result = srt_file.fix_ts_overlap(OverlapFixMode::After);
+        assert!(result.is_ok());
+
+        let expected_entries = vec![
+            create_entry(0, 4), // 修改后，结束时间为4秒
+            create_entry(4, 9), // 修改后，结束时间为9秒
+            create_entry(9, 15),
+        ];
+        assert_eq!(srt_file.entries, expected_entries);
+    }
+
+    #[test]
+    fn test_fix_before_mode() {
+        let mut srt_file = SrtFile {
+            entries: vec![create_entry(0, 5), create_entry(4, 10), create_entry(9, 15)],
+        };
+
+        let result = srt_file.fix_ts_overlap(OverlapFixMode::Before);
+        assert!(result.is_ok());
+
+        let expected_entries = vec![
+            create_entry(0, 5),
+            create_entry(5, 10),  // 修改后，起始时间为5秒
+            create_entry(10, 15), // 修改后，起始时间为10秒
+        ];
+        assert_eq!(srt_file.entries, expected_entries);
+    }
+
+    #[test]
+    fn test_zero_duration_is_valid() {
+        // 两个条目精确相接，修复后持续时间为0
+        let mut srt_file = SrtFile {
+            entries: vec![create_entry(5, 10), create_entry(5, 10)],
+        };
+
+        // 模式After：前一个结束时间（10）将被修改为后一个起始时间（5）
+        // 结果：beg=5, end=5，持续时间为0，这应该是合法的
+        let result = srt_file.fix_ts_overlap(OverlapFixMode::After);
+        assert!(result.is_ok());
+
+        // 预期结果
+        let expected_entries = vec![create_entry(5, 5), create_entry(5, 10)];
+        assert_eq!(srt_file.entries, expected_entries);
+
+        // 重置并测试另一种模式
+        let mut srt_file = SrtFile {
+            entries: vec![create_entry(5, 10), create_entry(5, 10)],
+        };
+
+        // 模式Before：后一个起始时间（5）将被修改为前一个结束时间（10）
+        // 结果：beg=10, end=10，持续时间为0，这应该是合法的
+        let result = srt_file.fix_ts_overlap(OverlapFixMode::Before);
+        assert!(result.is_ok());
+
+        let expected_entries = vec![create_entry(5, 10), create_entry(10, 10)];
+        assert_eq!(srt_file.entries, expected_entries);
+    }
+
+    #[test]
+    fn test_negative_duration_is_invalid() {
+        // 修复会导致负数持续时间
+        let mut srt_file = SrtFile {
+            entries: vec![create_entry(10, 15), create_entry(5, 20)],
+        };
+        let original_entries = srt_file.entries.clone();
+
+        // 模式After：前一个结束时间（15）将被修改为后一个起始时间（5）
+        // 结果：beg=10, end=5，持续时间为-5，报错
+        let result = srt_file.fix_ts_overlap(OverlapFixMode::After);
+        assert!(result.is_err());
+        assert_eq!(srt_file.entries, original_entries);
+    }
+
+    // --- 不重叠的正常情况 ---
+    #[test]
+    fn test_no_overlap() {
+        let srt_file = SrtFile {
+            entries: vec![
+                create_entry(0, 5),
+                create_entry(6, 10),
+                create_entry(11, 15),
+            ],
+        };
+        assert!(!srt_file.check_ts_overlap());
+    }
+
+    // --- 精确相接的情况 ---
+    #[test]
+    fn test_touching_entries() {
+        let srt_file = SrtFile {
+            entries: vec![
+                create_entry(0, 5),
+                create_entry(5, 10),
+                create_entry(10, 15),
+            ],
+        };
+        assert!(!srt_file.check_ts_overlap());
+    }
+
+    // --- 有重叠的情况 ---
+    #[test]
+    fn test_with_overlap() {
+        let srt_file = SrtFile {
+            entries: vec![
+                create_entry(0, 5),
+                create_entry(4, 10), // 重叠
+                create_entry(11, 15),
+            ],
+        };
+        assert!(srt_file.check_ts_overlap());
+    }
+
+    // --- 重叠发生在中间 ---
+    #[test]
+    fn test_overlap_in_middle() {
+        let srt_file = SrtFile {
+            entries: vec![
+                create_entry(0, 5),
+                create_entry(6, 10),
+                create_entry(9, 15), // 重叠
+            ],
+        };
+        assert!(srt_file.check_ts_overlap());
+    }
+
+    // --- 完全包含的情况 ---
+    #[test]
+    fn test_contained_entry() {
+        let srt_file = SrtFile {
+            entries: vec![
+                create_entry(0, 10),
+                create_entry(2, 8), // 完全包含在前一个条目中
+            ],
+        };
+        assert!(srt_file.check_ts_overlap());
+    }
+
+    // --- 边界情况：条目数量为 0 或 1 ---
+    #[test]
+    fn test_empty_file_overlap() {
+        let srt_file = SrtFile { entries: vec![] };
+        assert!(!srt_file.check_ts_overlap());
+    }
+
+    #[test]
+    fn test_single_entry() {
+        let srt_file = SrtFile {
+            entries: vec![create_entry(0, 5)],
+        };
+        assert!(!srt_file.check_ts_overlap());
+    }
+
+    // --- 更多重叠测试 ---
+    #[test]
+    fn test_complex_overlap() {
+        let srt_file = SrtFile {
+            entries: vec![
+                create_entry(0, 5),
+                create_entry(5, 10),
+                create_entry(12, 17),
+                create_entry(16, 20), // 再次重叠
+            ],
+        };
+        assert!(srt_file.check_ts_overlap());
+    }
 
     #[test]
     fn test_write_single_entry() {
