@@ -1,3 +1,5 @@
+use std::error;
+
 use blowup::{
     sub::{OverlapFixMode, extract_sub_srt, update_srt_time},
     torrent::download_newest_tracker,
@@ -61,7 +63,7 @@ enum SubCommands {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn error::Error>> {
     // hermes tracker update
     // torrent::download_newest_tracker().await.unwrap()
     let cli = Hermes::parse();

@@ -24,7 +24,45 @@
 1. 种子下载器，qBittorrent每次下电影需要手动修改tracker列表，我需要在github上将几个仓库的新的tracker文件打开拷贝，这个工作需要自动化
 2. 字幕处理，现在从字幕网下载的字幕基本都和YTS资源时间轴对不上，需要简单处理，我想直接从下载好的电影中把字幕流提取出来使用本地大模型翻译，试试提高翻译质量。提取工具使用`ffmpeg`
 
+## 用法
+
+### CLI工具用法
+
+```bash
+cargo install blowup
+
+# add blowup to your PATH if not
+
+blowup --help
+
+Usage: blowup <COMMAND>
+
+Commands:
+  tracker  handle all things about tracker list
+  sub      subtitle file processing tools
+  help     Print this message or the help of the given subcommand(s)
+
+blowup tracker --help
+
+Usage: blowup tracker <COMMAND>
+
+Commands:
+  update  update the newest tracker list
+  help    Print this message or the help of the given subcommand(s)
+
+blowup sub --help
+
+Usage: blowup sub <COMMAND>
+
+Commands:
+  incr    Modify SRT time entries: add or subtract a millisecond offset
+  export  Extract subtitle streams from the specified video container to a designated location
+  help    Print this message or the help of the given subcommand(s)
+```
+
 ## 字幕
+
+用法
 
 需求：对于YTS源的电影，大部分格式是mkv或者mp4，并且都有内嵌字幕，所以需要根据英文字幕翻译中文字幕。有以下条件
 

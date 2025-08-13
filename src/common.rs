@@ -5,33 +5,32 @@ use std::{
     process::ExitStatus,
 };
 
-use anyhow::Result;
 use thiserror::Error;
 use tokio::process::Command;
 use walkdir::WalkDir;
 use which::which;
 
 #[derive(Debug, Error)]
-enum CommonError {
-    #[error("the provided path is incomplete; it's missing the final element")]
-    PathMissingLeafError,
-    #[error("the provided path contains characters that are not valid UTF-8 encoded")]
+pub enum CommonError {
+    #[error("The provided path is incomplete; it's missing the final element")]
+    PathMissingFinalError,
+    #[error("The provided path contains characters that are not valid UTF-8 encoded")]
     NonUtf8PathError,
 }
 
 /// 根据给定的路径 `[ori_path]` 生成一个相同的路径，但是在路径的最后一个元素加上指定的分隔符 `[c]` 和后缀 `[suffix]`
 /// # Error
 /// * 如果路径没有“最后一个文件“，会返回错误
-pub fn same_path_with(
-    ori_path: impl AsRef<Path>,
+pub fn same_path_with<P: AsRef<Path>>(
+    ori_path: P,
     suffix: &str,
     c: &str,
-) -> Result<impl AsRef<Path>> {
+) -> Result<PathBuf, CommonError> {
     let ori_path = ori_path.as_ref();
     let mut new_path = PathBuf::from(ori_path);
     let new_name = ori_path
         .file_stem()
-        .ok_or(CommonError::PathMissingLeafError)?
+        .ok_or_else(|| CommonError::PathMissingFinalError)?
         .to_str()
         .ok_or(CommonError::NonUtf8PathError)?;
     let new_name = format!("{}{}{}", new_name, c, suffix);
@@ -97,7 +96,7 @@ pub async fn exec_command<S: AsRef<OsStr>>(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, str::FromStr};
 
     use tempfile::tempdir;
 
@@ -107,16 +106,16 @@ mod tests {
     fn test_same_path_with() {
         assert!(same_path_with("/", "f", "_").is_err());
         assert_eq!(
-            same_path_with("/root", "f", "_").unwrap().as_ref(),
-            Path::new("/root_f")
+            same_path_with("/root", "f", "_").unwrap(),
+            PathBuf::from_str("/root_f").unwrap()
         );
         assert_eq!(
-            same_path_with("/root/test", "f", "_").unwrap().as_ref(),
-            Path::new("/root/test_f")
+            same_path_with("/root/test", "f", "_").unwrap(),
+            PathBuf::from_str("/root/test_f").unwrap()
         );
         assert_eq!(
-            same_path_with("/root/test.rs", "f", "_").unwrap().as_ref(),
-            Path::new("/root/test_f.rs")
+            same_path_with("/root/test.rs", "f", "_").unwrap(),
+            PathBuf::from_str("/root/test_f.rs").unwrap()
         );
     }
 
