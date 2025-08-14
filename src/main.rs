@@ -1,7 +1,9 @@
 use std::error;
 
 use blowup::{
-    sub::{OverlapFixMode, extract_sub_srt, update_srt_time},
+    sub::{
+        OutputFormat, OverlapFixMode, extract_sub_srt, list_all_subtitle_stream, update_srt_time,
+    },
     torrent::download_newest_tracker,
 };
 use clap::{Args, Parser, Subcommand};
@@ -60,6 +62,19 @@ enum SubCommands {
         file_name: String,
         output_path: String,
     },
+    #[command(
+        name = "list",
+        about = "List the number of subtitle streams in a video container"
+    )]
+    ListSubStream {
+        file_name: String,
+        #[arg(
+            short = 'f',
+            long = "format",
+            help = "Output format: list/json/tab, default is list"
+        )]
+        format: Option<OutputFormat>,
+    },
 }
 
 #[tokio::main]
@@ -84,6 +99,11 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
             } => extract_sub_srt(file_name, output_path)
                 .await
                 .expect("Failed to extract the subtitle stream from media file"),
+            SubCommands::ListSubStream { file_name, format } => {
+                list_all_subtitle_stream(file_name, format.unwrap_or(OutputFormat::List).clone())
+                    .await
+                    .expect("Failed to retrieve the information about subtitle stream")
+            }
         },
     }
     Ok(())

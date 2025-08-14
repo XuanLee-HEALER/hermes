@@ -28,7 +28,7 @@
 
 ### CLI工具用法
 
-```bash
+```text
 cargo install blowup
 
 # add blowup to your PATH if not
@@ -40,7 +40,6 @@ Usage: blowup <COMMAND>
 Commands:
   tracker  handle all things about tracker list
   sub      subtitle file processing tools
-  help     Print this message or the help of the given subcommand(s)
 
 blowup tracker --help
 
@@ -48,7 +47,6 @@ Usage: blowup tracker <COMMAND>
 
 Commands:
   update  update the newest tracker list
-  help    Print this message or the help of the given subcommand(s)
 
 blowup sub --help
 
@@ -57,7 +55,7 @@ Usage: blowup sub <COMMAND>
 Commands:
   incr    Modify SRT time entries: add or subtract a millisecond offset
   export  Extract subtitle streams from the specified video container to a designated location
-  help    Print this message or the help of the given subcommand(s)
+  list    List the number of subtitle streams in a video container
 ```
 
 ## 字幕
