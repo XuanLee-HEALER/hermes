@@ -2,7 +2,8 @@ use std::error;
 
 use blowup::{
     sub::{
-        OutputFormat, OverlapFixMode, extract_sub_srt, list_all_subtitle_stream, update_srt_time,
+        OutputFormat, OverlapFixMode, compare_two_srt_file, extract_sub_srt,
+        list_all_subtitle_stream, update_srt_time,
     },
     torrent::download_newest_tracker,
 };
@@ -75,6 +76,16 @@ enum SubCommands {
         )]
         format: Option<OutputFormat>,
     },
+    #[command(
+        name = "cmp",
+        about = "Compare two SRT subtitle files, using -i to enable interactive display"
+    )]
+    CmpTwoSrt {
+        srt_1: String,
+        srt_2: String,
+        #[arg(short, help = "enable interactive display")]
+        interactive: bool,
+    },
 }
 
 #[tokio::main]
@@ -104,6 +115,13 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                     .await
                     .expect("Failed to retrieve the information about subtitle stream")
             }
+            SubCommands::CmpTwoSrt {
+                srt_1,
+                srt_2,
+                interactive,
+            } => compare_two_srt_file(srt_1.clone(), srt_2.clone(), *interactive)
+                .await
+                .expect("Failed to compare the two srt files"),
         },
     }
     Ok(())

@@ -7,6 +7,7 @@
 use std::{
     fmt::Display,
     io::{self, BufRead, BufReader, BufWriter, Read, Write},
+    ops::Deref,
     result,
     sync::LazyLock,
 };
@@ -46,6 +47,14 @@ pub enum OverlapFixMode {
     Before,
     #[clap(name = "2")]
     After,
+}
+
+impl Deref for SrtFile {
+    type Target = Vec<SubtitleEntry>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
 }
 
 impl SrtFile {
@@ -229,6 +238,16 @@ pub struct SubtitleEntry {
     pub text: String,
 }
 
+impl SubtitleEntry {
+    pub fn to_entry_str(&self) -> Vec<String> {
+        let mut res = vec![String::new(); 3];
+        res[0] = self.index.to_string();
+        res[1] = format!("{}", self.timestamp);
+        res[2] = self.text.clone();
+        res
+    }
+}
+
 static SRT_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\d{2}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2}):(\d{2}):(\d{2}),(\d{3})$").unwrap()
 });
@@ -358,6 +377,12 @@ mod tests {
             timestamp: SrtTime::new(Duration::seconds(beg_s), Duration::seconds(end_s)),
             text: "".to_string(),
         }
+    }
+
+    #[test]
+    fn test_to_entry_str() {
+        let entry = create_entry(100, 200);
+        println!("entry is {:?}", entry.to_entry_str())
     }
 
     // --- 正向调整测试 ---

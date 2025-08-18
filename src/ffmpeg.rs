@@ -2,7 +2,7 @@ use std::{ffi::OsStr, path::Path, result};
 
 use thiserror::Error;
 
-use crate::common::{CommandError, exec_command, find_command_path};
+use crate::common::{CommandError, CommonError, exec_command, find_command_path};
 
 pub enum FfmpegTool {
     Ffmpeg,
@@ -41,12 +41,12 @@ pub enum FfmpegError {
     #[error("ffmpeg cli is not found")]
     FfmpegNotFound,
     #[error(transparent)]
-    CmdExecError(CommandError),
+    CmdExecError(CommonError),
 }
 
-impl From<CommandError> for FfmpegError {
-    fn from(value: CommandError) -> Self {
-        FfmpegError::CmdExecError(value)
+impl From<CommonError> for FfmpegError {
+    fn from(value: CommonError) -> Self {
+        Self::CmdExecError(value)
     }
 }
 

@@ -1,12 +1,14 @@
 use std::{
     ffi::OsStr,
     io,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::ExitStatus,
+    result,
 };
 
 use thiserror::Error;
-use tokio::process::Command;
+use tokio::{fs::File, io::AsyncReadExt, process::Command};
 use walkdir::WalkDir;
 use which::which;
 
@@ -16,16 +18,20 @@ pub enum CommonError {
     PathMissingFinalError,
     #[error("The provided path contains characters that are not valid UTF-8 encoded")]
     NonUtf8PathError,
+    #[error("System IO operation error")]
+    IoError,
+    #[error("Asynchronous system IO operation error")]
+    AsyncIoError(#[from] tokio::io::Error),
+    #[error("Retransmit CommandError")]
+    CommandError(#[from] CommandError),
 }
+
+type Result<T> = result::Result<T, CommonError>;
 
 /// 根据给定的路径 `[ori_path]` 生成一个相同的路径，但是在路径的最后一个元素加上指定的分隔符 `[c]` 和后缀 `[suffix]`
 /// # Error
 /// * 如果路径没有“最后一个文件“，会返回错误
-pub fn same_path_with<P: AsRef<Path>>(
-    ori_path: P,
-    suffix: &str,
-    c: &str,
-) -> Result<PathBuf, CommonError> {
+pub fn same_path_with<P: AsRef<Path>>(ori_path: P, suffix: &str, c: &str) -> Result<PathBuf> {
     let ori_path = ori_path.as_ref();
     let mut new_path = PathBuf::from(ori_path);
     let new_name = ori_path
@@ -73,12 +79,12 @@ pub enum CommandError {
 pub async fn exec_command<S: AsRef<OsStr>>(
     cmd: impl AsRef<Path>,
     options: Option<Vec<S>>,
-) -> Result<(String, String), CommandError> {
+) -> Result<(String, String)> {
     let mut command = Command::new(cmd.as_ref().as_os_str());
     if let Some(options) = options {
         command.args(options);
     }
-    let output = command.output().await?;
+    let output = command.output().await.map_err(|e| CommandError::Io(e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -90,8 +96,49 @@ pub async fn exec_command<S: AsRef<OsStr>>(
             cmd: cmd.as_ref().to_string_lossy().to_string(),
             status: output.status,
             stderr,
-        })
+        }
+        .into())
     }
+}
+
+/// 将给定的文件列表读取到字符串中并返回
+/// # Error
+/// * 如果文件不可读或者路径不存在、类型不是文件会返回系统IO错误
+/// # Panic
+/// 如果文件数量很多，程序会因为内存占用过高而崩溃
+pub async fn read_multiple_file_to_string<P: AsRef<Path> + Send + 'static>(
+    files: Vec<P>,
+) -> Result<Vec<String>> {
+    let file_size = files.len();
+    let mut handlers: Vec<_> = Vec::with_capacity(file_size);
+    for (idx, file) in files.into_iter().enumerate() {
+        handlers.push(tokio::spawn(async move { read_file_to_string(idx, file) }));
+    }
+    let mut res = vec![Default::default(); file_size];
+    for handler in handlers {
+        match handler.await {
+            Ok(text) => {
+                let (idx, text) = text.await?;
+                res[idx] = text
+            }
+            Err(e) => panic!("Tokio: failed to execute some subtask {}", e),
+        }
+    }
+
+    Ok(res)
+}
+
+async fn read_file_to_string<P: AsRef<Path>>(idx: usize, file: P) -> Result<(usize, String)> {
+    const SIZE_LIMIT: u64 = 1024 * 1024;
+    let mut res = String::new();
+    let file_path = file.as_ref();
+    if !file_path.is_file() || file_path.metadata()?.size() > SIZE_LIMIT {
+        return Err(CommonError::IoError);
+    } else {
+        let mut file = File::open(file_path).await?;
+        file.read_to_string(&mut res).await?;
+    }
+    Ok((idx, res))
 }
 
 #[cfg(test)]
@@ -101,6 +148,74 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[tokio::test]
+    async fn test_read_multiple_file_success() {
+        let dir = tempdir().unwrap();
+        let file1_path = dir.path().join("file1.txt");
+        let file2_path = dir.path().join("file2.txt");
+
+        fs::write(&file1_path, "Hello, world!").unwrap();
+        fs::write(&file2_path, "Another file content.").unwrap();
+
+        let files = vec![file1_path.clone(), file2_path.clone()];
+        let result = read_multiple_file_to_string(files).await;
+
+        assert!(result.is_ok());
+        let contents = result.unwrap();
+        assert_eq!(contents.len(), 2);
+        assert_eq!(contents[0], "Hello, world!");
+        assert_eq!(contents[1], "Another file content.");
+    }
+
+    #[tokio::test]
+    async fn test_read_multiple_file_with_non_existent_file() {
+        let dir = tempdir().unwrap();
+        let file1_path = dir.path().join("file1.txt");
+        let nonexistent_path = PathBuf::from("/path/to/a/nonexistent/file");
+
+        fs::write(&file1_path, "Existing file.").unwrap();
+
+        let files = vec![file1_path.clone(), nonexistent_path.clone()];
+        let result = read_multiple_file_to_string(files).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            CommonError::IoError => assert!(true),
+            _ => panic!("Expected IoError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_multiple_file_with_directory() {
+        let dir = tempdir().unwrap();
+        let file1_path = dir.path().join("file1.txt");
+        let directory_path = dir.path().join("my_dir");
+        fs::create_dir(&directory_path).unwrap();
+
+        fs::write(&file1_path, "Existing file.").unwrap();
+
+        let files = vec![file1_path.clone(), directory_path.clone()];
+        let result = read_multiple_file_to_string(files).await;
+
+        assert!(result.is_err());
+        if let Err(CommonError::IoError) = result {
+            // 不同的操作系统返回的错误类型可能不同
+            // Unix-like 系统通常返回 IsADirectory，Windows 可能会返回 PermissionDenied
+            assert!(true);
+        } else {
+            panic!("Expected an IoError");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_empty_file_list() {
+        let files: Vec<PathBuf> = Vec::new();
+        let result = read_multiple_file_to_string(files).await;
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
 
     #[test]
     fn test_same_path_with() {
@@ -247,11 +362,11 @@ mod tests {
 
         // 验证结果，应该返回 CommandError::CommandFailed
         assert!(result.is_err());
-        if let Err(CommandError::CommandFailed {
+        if let Err(CommonError::CommandError(CommandError::CommandFailed {
             cmd: _,
             status,
             stderr,
-        }) = result
+        })) = result
         {
             assert_ne!(status.code(), Some(0));
             assert_eq!(stderr, ""); // 此命令通常不产生标准错误
@@ -268,7 +383,7 @@ mod tests {
 
         // 验证结果，应该返回一个 io::Error，通常是 "No such file or directory"
         assert!(result.is_err());
-        if let Err(CommandError::Io(e)) = result {
+        if let Err(CommonError::CommandError(CommandError::Io(e))) = result {
             assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
         } else {
             panic!("Expected an Io error, but got a different error.");

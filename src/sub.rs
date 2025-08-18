@@ -14,9 +14,14 @@ use serde::Deserialize;
 use serde::Serialize;
 pub use srt::OverlapFixMode;
 pub use srt::SrtFile;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
+use tokio::io::stdin;
 
+use std::io::Cursor;
 use std::{fs::File, path::Path};
 
+use crate::common::read_multiple_file_to_string;
 use crate::{
     common::same_path_with,
     ffmpeg::{FfmpegError, FfmpegTool},
@@ -232,5 +237,65 @@ pub async fn list_all_subtitle_stream(
         }
     }
 
+    Ok(())
+}
+
+pub async fn compare_two_srt_file<P: AsRef<Path> + Send + 'static>(
+    file_1: P,
+    file_2: P,
+    interactive: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file_contents = read_multiple_file_to_string(vec![file_1, file_2]).await?;
+    let srt_1 = SrtFile::read(Cursor::new(file_contents.remove(0)))?;
+    let srt_2 = SrtFile::read(Cursor::new(file_contents.remove(0)))?;
+    let mut print_stream = srt_1.iter().zip(srt_2.iter()).map(|(entry_1, entry_2)| {
+        let l_str_vec = entry_1.to_entry_str();
+        let r_str_vec = entry_2.to_entry_str();
+        let mut table = Table::new();
+        l_str_vec.iter().zip(r_str_vec.iter()).for_each(|(l, r)| {
+            table.add_row(Row::new(vec![Cell::new(l), Cell::new(r)]));
+        });
+        table
+    });
+    let mut reader = BufReader::new(stdin());
+    let mut input_buf = String::new();
+    let mut counter = 1;
+    loop {
+        while counter > 0 {
+            if let Some(nxt) = print_stream.next() {
+                println!("{}", nxt);
+                if interactive {
+                    counter -= 1;
+                }
+            } else {
+                break;
+            }
+        }
+        if counter > 0 {
+            break;
+        }
+        println!("> n(next) q(quit) 1~9(show next 1~9)");
+
+        reader.read_line(&mut input_buf).await?;
+        let input = input_buf.trim();
+        match input {
+            "n" | "1" => {
+                counter = 1;
+            }
+            "q" => {
+                break;
+            }
+            "2" => counter = 2,
+            "3" => counter = 3,
+            "4" => counter = 4,
+            "5" => counter = 5,
+            "6" => counter = 6,
+            "7" => counter = 7,
+            "8" => counter = 8,
+            "9" => counter = 9,
+            _ => println!("invalid key input, retry"),
+        }
+        input_buf.clear();
+    }
     Ok(())
 }
