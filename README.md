@@ -1,6 +1,8 @@
 # blowup
 
-![维护状态](https://img.shields.io/badge/Status-Active-yellow?style=for-the-badge&logo=movistar&logoSize=wider) ![版本](https://img.shields.io/badge/Version-0.1.0-red?style=for-the-badge&logo=movistar&logoSize=wider) ![License](https://img.shields.io/badge/License-MIT-darkgreen?style=for-the-badge&logo=movistar&logoSize=wider)
+> [Click here for Chinese version/中文版本点此链接](./README_zh.md)
+
+![Maintenance Status](https://img.shields.io/badge/Status-Active-yellow?style=for-the-badge&logo=movistar&logoSize=wider) ![Version](https://img.shields.io/badge/Version-0.1.1-red?style=for-the-badge&logoSize=wider) ![License](https://img.shields.io/badge/License-MIT-darkgreen?style=for-the-badge&logoSize=wider)
 
 > **blow-up [Michelangelo Antonioni]**: A fashion photographer unknowingly captures a death on film after following two lovers in a park.
 >
@@ -8,109 +10,67 @@
 >
 > 我认为的最好的电影，目前为止
 
-解决在观影过程中遇到的一些技术性问题
+---
 
-我的观影流程
+**blowup** is a command-line interface (CLI) tool designed to streamline and automate the technical aspects of my film-watching experience, from managing movie trackers to handling subtitle files.
 
-1. 通过各种媒介（影评、豆瓣、抖音）了解到一部感兴趣的电影
-2. 在种子网站搜资源，例如 rarbg
-3. 下载资源
-4. 处理字幕，YTS资源通常带英文字幕
-5. 观看电影
-6. 电影的处理
+It's a personal project born out of a passion for cinema and a desire to solve common technical frustrations, so I can spend more time enjoying the art itself.
 
-目前遇到的问题
+## ✨ Features
 
-1. 种子下载器，qBittorrent每次下电影需要手动修改tracker列表，我需要在github上将几个仓库的新的tracker文件打开拷贝，这个工作需要自动化
-2. 字幕处理，现在从字幕网下载的字幕基本都和YTS资源时间轴对不上，需要简单处理，我想直接从下载好的电影中把字幕流提取出来使用本地大模型翻译，试试提高翻译质量。提取工具使用`ffmpeg`
+### Current Features:
 
-## 用法
+* Tracker Management: Download the latest tracker list from a specific GitHub repository.
+* Subtitle Stream Management:
+  * List available subtitle streams within a video container (requires ffprobe).
+  * Export a specific subtitle stream from a video container to an SRT file (requires ffmpeg).
+* SRT Subtitle Manipulation:
+  * Shift all timestamps in an SRT subtitle file by a specified time offset.
+  * Interactively compare and synchronize two SRT subtitle files.
 
-### CLI工具用法
+### Planned Features:
 
-```text
+* Flexible Tracker Sources: Support fetching tracker lists from multiple sources, including various GitHub repositories and direct URLs.
+* Local Subtitle Translation: Translate subtitle files using a local large language model (LLM).
+
+## 🚀 Installation & Usage
+
+You can install `blowup` directly from `crates.io`.
+
+> Note: The subtitle extraction and listing features require `ffmpeg` and `ffprobe` to be installed and accessible in your system's PATH. You can download them from the official website or a package manager.
+
+```bash
 cargo install blowup
+# After installation, add the cargo binary path to your system's PATH if it's not already.
 
-# add blowup to your PATH if not
+# Command Overview
 
-blowup --help
+# The tool is structured with subcommands for each major function.
 
+# Main commands
 Usage: blowup <COMMAND>
 
 Commands:
   tracker  handle all things about tracker list
   sub      subtitle file processing tools
 
-blowup tracker --help
-
-Usage: blowup tracker <COMMAND>
-
-Commands:
-  update  update the newest tracker list
-
-blowup sub --help
-
-Usage: blowup sub <COMMAND>
-
-Commands:
-  incr    Modify SRT time entries: add or subtract a millisecond offset
-  export  Extract subtitle streams from the specified video container to a designated location
-  list    List the number of subtitle streams in a video container
+# For more detailed usage and examples, run:
+blowup --help
+blowup <subcommand> --help
+# For detailed usage of each command, please refer to the built-in --help documentation and the project's official documentation.
 ```
 
-## 字幕
+## 💡 Motivation
 
-用法
+The core inspiration behind blowup came from my personal film-watching workflow. I often found myself spending an excessive amount of time on repetitive tasks, such as manually updating torrent trackers or correcting subtitle synchronization.
 
-需求：对于YTS源的电影，大部分格式是mkv或者mp4，并且都有内嵌字幕，所以需要根据英文字幕翻译中文字幕。有以下条件
+This project is an attempt to automate these chores, making the technical part of movie-watching seamless, so the focus can remain on the story, cinematography, and performances.
 
-1. 电影文件，格式为mkv和mp4，可以直接使用ffmpeg导出字幕流为srt文件
-2. 然后将文件处理成”翻译段落“，如果是多行，就折叠成一行
-3. 将待翻译的句子传入大模型
-4. 处理输出的翻译结果
-5. 创建新的字幕文件
+## 🤝 Contributing
 
-校对？
+Contributions are welcome! If you've encountered a similar problem or have an idea for a new feature, feel free to open an issue or submit a pull request.
 
-提取音频流 -> 音频转文字 -> 识别语种 直接翻译
 
-### 提取字幕
+## 📜 License
 
-直接使用 ffmpeg 工具来提取字幕
-
-TODO：首先检测容器中是否有字幕流，有多个字幕流的情况（放到查询中），导出字幕流使用ID来标识
-
-### srt
-
-实现一个srt文件的解析器，提供一些对外接口
-
-功能列表：
-
-* 从 impl Read 中读取内容，解析成 SrtFile 类型
-* SrtFile 类型提供 Write 方法，写出到 impl Write 类型中
-* 可以修改条目的时间，比如向前或向后修改时间，还可以指定条目的范围进行修改
-* 每个字幕条目的持续时间
-* 获取某个条目的字符串，包括原始字符串、语义切分后的字符串等
-
-### 翻译字幕
-
-读取指定路径的srt字幕文件，根据指定的语言名称，将其翻译成中文，在同目录生成翻译好的中文字幕文件
-
-翻译过程需要调用大模型接口（http）
-
-* 明确电影
-* 翻译要求
-
-你是一个专业的电影字幕翻译专家。
-你的任务是将电影对话从 [源语言，例如：英文] 翻译成 [目标语言，例如：简体中文]。
-
-请严格遵循以下要求：
-
-1. **准确传达意义**：忠实于原文的剧情、对话、情感和意图。确保所有专有名词（人名、地名、术语）翻译一致且准确。
-2. **自然流畅的中文**：翻译结果必须符合中文的语法习惯和表达方式，避免生硬的直译。
-3. **简练易懂**：译文应简洁明了，避免冗余，方便观众快速阅读和理解，不影响观影体验。
-4. **文化本地化**：对于源语言中的习语、俚语、梗、双关语或文化特定内容，进行恰当的意译或本地化处理，确保目标受众能够理解其含义和幽默。
-5. **语境匹配**：充分理解对话的上下文和影片整体语境，确保译文在不同场景下含义正确。
-6. **时间轴友好（可选，如果需要模型考虑）**：尽管模型不直接处理时间轴，但在翻译时请考虑字幕最终呈现的易读性，句子不宜过长，单句信息量适中，为后续的分行和时间轴同步预留空间。
-
-提供影片类型、提供背景信息、要求解释特定词语
+This project is licensed under the MIT License. For the full license text, see the [LICENSE](./LICENSE.txt) file.
